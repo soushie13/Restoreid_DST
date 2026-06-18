@@ -9,7 +9,7 @@ source venv/bin/activate
 pip install -r requirements.txt
 4. Run the app
 shiny run app.py --reload
-Then open http://localhost:8000 in your browser. The --reload flag means the app auto-restarts whenever you save a file — handy while developing.
+Then open http://localhost:8000 in your browser. The --reload flag means the app auto-restarts whenever you save a file.
 
 If you're on Windows, step 2 becomes:
 python -m venv venv
