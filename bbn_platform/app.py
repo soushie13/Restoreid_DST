@@ -11,11 +11,22 @@ from shiny import App, ui, render, reactive
 import sys, os
 sys.path.insert(0, os.path.dirname(__file__))
 from data.model_summaries import ALL_MODELS, SCENARIOS
+from data.funding_scenarios import (
+    risk_at_transition,
+    BASELINE_RISK,
+    BASELINE_CI,
+    MODEL_META,
+    SYSTEMS,
+)
 from modules.plots import (
     disease_risk_plot,
     regulation_plot,
     stability_trajectory_plot,
     comparison_plot,
+)
+from modules.funding_plots import (
+    transition_curve_plot,
+    multi_system_transition_plot,
 )
 from modules.network_diagram import network_diagram_html
 from modules.ui_helpers import scenario_card, model_header, insight_box
@@ -270,6 +281,11 @@ app_ui = ui.page_fluid(
                 ui.nav_panel(
                     "Compare models",
                     ui.output_ui("compare_panel"),
+                ),
+                # ── TAB 6: FUNDING SCENARIOS ──────────────────
+                ui.nav_panel(
+                    "Funding scenarios",
+                    ui.output_ui("funding_panel"),
                 ),
             ),
             style="padding: 1rem 1.5rem;"
@@ -553,7 +569,162 @@ def server(input, output, session):
             ),
         )
 
-    # ── COMPARE TAB ──────────────────────────────────────────
+    # ── FUNDING SCENARIOS TAB ────────────────────────────────
+    @output
+    @render.ui
+    def funding_panel():
+        return ui.div(
+            ui.h4("Funding scenario explorer", style="color:#2d3748; margin-bottom:0.3rem;"),
+            ui.div(
+                "Drag the slider to explore what happens if a restoration project changes "
+                "intensity at a different point in its 15-year lifecycle. Results reflect the "
+                "ecosystem's accumulated ecological legacy at the transition point — projects "
+                "that have already stabilised are harder to redirect.",
+                style="font-size:0.82rem; color:#718096; margin-bottom:1.2rem;"
+            ),
+
+            ui.layout_columns(
+                ui.div(
+                    ui.div("Scenario direction", class_="section-head"),
+                    ui.input_radio_buttons(
+                        "funding_direction",
+                        None,
+                        choices={
+                            "rampup_low":  "📈 Ramp-up: Low → High",
+                            "rampup_mod":  "📈 Ramp-up: Moderate → High",
+                            "collapse":    "📉 Funding collapse: High → Low",
+                        },
+                        selected="rampup_low",
+                    ),
+                    ui.div("Disease system", class_="section-head"),
+                    ui.input_radio_buttons(
+                        "funding_system",
+                        None,
+                        choices={
+                            "mosquito": "🦟 Mosquito-borne",
+                            "tick":     "🕷️ Tick-borne",
+                            "rodent":   "🐭 Rodent-borne",
+                            "zoonotic": "🦠 Direct-contact zoonoses",
+                            "all":      "📊 Compare all 4 systems",
+                        },
+                        selected="mosquito",
+                    ),
+                    col_widths=12,
+                ),
+                col_widths=[12],
+            ),
+
+            ui.div("Transition year", class_="section-head"),
+            ui.input_slider(
+                "transition_year",
+                None,
+                min=0, max=15, value=5, step=0.5,
+                post=" yr",
+            ),
+            ui.div(
+                "Year 0 = transition happens immediately (no time spent at the starting intensity). "
+                "Year 15 = no transition occurs (stays at starting intensity for the full project).",
+                style="font-size:0.78rem; color:#a0aec0; margin:-0.4rem 0 1rem;"
+            ),
+
+            ui.output_ui("funding_result_cards"),
+            ui.output_ui("funding_curve_plot"),
+
+            ui.div("Reading this chart", class_="section-head"),
+            ui.div(
+                "The curve shows the eventual (year-15) disease risk depending on when the "
+                "restoration intensity change happens. The further right your transition point, "
+                "the more years were spent at the starting intensity — and the more of that "
+                "ecological trajectory carries forward, even after the change. This is why a "
+                "late ramp-up only partially recovers the benefit of high-intensity restoration, "
+                "and why a late funding collapse only partially erodes the benefit already gained.",
+                class_="insight-box",
+                style="border-left-color:#4a5568;"
+            ),
+        )
+
+    @reactive.calc
+    def funding_phases():
+        direction = input.funding_direction()
+        if direction == "rampup_low":
+            return "low", "high", "Ramp-up (Low → High)"
+        elif direction == "rampup_mod":
+            return "moderate", "high", "Ramp-up (Moderate → High)"
+        else:
+            return "high", "low", "Funding collapse (High → Low)"
+
+    @output
+    @render.ui
+    def funding_result_cards():
+        p1, p2, label = funding_phases()
+        t = input.transition_year()
+        sysname = input.funding_system()
+
+        if sysname == "all":
+            cards = []
+            for sk in SYSTEMS:
+                meta = MODEL_META[sk]
+                risk = risk_at_transition(sk, p1, p2, t)
+                baseline_p1 = BASELINE_RISK[sk][p1]
+                delta = risk - baseline_p1
+                cards.append(
+                    ui.div(
+                        ui.div(f"{meta['icon']} {meta['label']}", class_="metric-label",
+                               style="text-transform:none; font-size:0.82rem; font-weight:600;"),
+                        ui.div(f"{risk*100:.0f}%", class_="metric-value",
+                               style=f"color:{meta['color']};"),
+                        ui.div(
+                            f"{'↑' if delta > 0 else '↓' if delta < 0 else '='} "
+                            f"{abs(delta)*100:.0f}pp vs. pure {p1}",
+                            class_="metric-range",
+                        ),
+                        class_="metric-card",
+                    )
+                )
+            return ui.layout_columns(*cards, col_widths=[3, 3, 3, 3])
+        else:
+            meta = MODEL_META[sysname]
+            risk = risk_at_transition(sysname, p1, p2, t)
+            risk_p1 = BASELINE_RISK[sysname][p1]
+            risk_p2 = BASELINE_RISK[sysname][p2]
+            return ui.layout_columns(
+                ui.div(
+                    ui.div(f"Year-15 risk at t={t:g} yr", class_="metric-label"),
+                    ui.div(f"{risk*100:.0f}%", class_="metric-value",
+                           style=f"color:{meta['color']};"),
+                    ui.div("Resulting disease risk probability", class_="metric-range"),
+                    class_="metric-card",
+                ),
+                ui.div(
+                    ui.div(f"Pure {p1} (no transition)", class_="metric-label"),
+                    ui.div(f"{risk_p1*100:.0f}%", class_="metric-value", style="color:#a0aec0;"),
+                    ui.div("Reference: stays at starting intensity", class_="metric-range"),
+                    class_="metric-card",
+                ),
+                ui.div(
+                    ui.div(f"Pure {p2} (immediate transition)", class_="metric-label"),
+                    ui.div(f"{risk_p2*100:.0f}%", class_="metric-value", style="color:#a0aec0;"),
+                    ui.div("Reference: starts at new intensity from year 0", class_="metric-range"),
+                    class_="metric-card",
+                ),
+                col_widths=[4, 4, 4],
+            )
+
+    @output
+    @render.ui
+    def funding_curve_plot():
+        p1, p2, label = funding_phases()
+        t = input.transition_year()
+        sysname = input.funding_system()
+
+        if sysname == "all":
+            html = multi_system_transition_plot(p1, p2, t)
+        else:
+            html = transition_curve_plot(sysname, p1, p2, t, label)
+
+        return ui.div(ui.HTML(html), class_="plot-wrap")
+
+
     @output
     @render.ui
     def compare_panel():
